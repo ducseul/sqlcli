@@ -3,6 +3,7 @@
 package conn
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net"
@@ -11,9 +12,13 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib"
-	_ "github.com/sijms/go-ora/v2"
+	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/stdlib"
+	go_ora "github.com/sijms/go-ora/v2"
+
+	"sqlcli/internal/tunnel"
 )
 
 // DBType is a supported database engine.
@@ -35,6 +40,7 @@ type Config struct {
 	Database string // database name (pg/mariadb) or service name (oracle)
 	Params   map[string]string
 	Timeout  time.Duration
+	Via      tunnel.Chain // proxies / ssh tunnels to connect through, in order
 }
 
 // DefaultPort returns the conventional port for a database type.
@@ -410,10 +416,17 @@ func (c *Config) DriverDSN() string {
 func (c *Config) Redacted() string {
 	if c.Type == Oracle && c.Database == "" {
 		if sid := c.Params["SID"]; sid != "" {
-			return fmt.Sprintf("%s://%s@%s:%d (SID=%s)", c.Type, c.User, c.Host, c.Port, sid)
+			return fmt.Sprintf("%s://%s@%s:%d (SID=%s)%s", c.Type, c.User, c.Host, c.Port, sid, c.via())
 		}
 	}
-	return fmt.Sprintf("%s://%s@%s:%d/%s", c.Type, c.User, c.Host, c.Port, c.Database)
+	return fmt.Sprintf("%s://%s@%s:%d/%s%s", c.Type, c.User, c.Host, c.Port, c.Database, c.via())
+}
+
+func (c *Config) via() string {
+	if len(c.Via) == 0 {
+		return ""
+	}
+	return " via " + c.Via.String()
 }
 
 // Open opens and pings the database.
@@ -421,7 +434,7 @@ func (c *Config) Open() (*sql.DB, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open(c.DriverName(), c.DriverDSN())
+	db, err := c.openDB()
 	if err != nil {
 		return nil, fmt.Errorf("open: %w", err)
 	}
@@ -432,4 +445,39 @@ func (c *Config) Open() (*sql.DB, error) {
 		return nil, fmt.Errorf("connect to %s: %w", c.Redacted(), err)
 	}
 	return db, nil
+}
+
+// openDB opens the pool, routing connections through c.Via when set.
+func (c *Config) openDB() (*sql.DB, error) {
+	if len(c.Via) == 0 {
+		return sql.Open(c.DriverName(), c.DriverDSN())
+	}
+	dial := c.Via.Dialer(c.Timeout)
+	switch c.Type {
+	case Postgres:
+		pc, err := pgx.ParseConfig(c.DriverDSN())
+		if err != nil {
+			return nil, err
+		}
+		pc.DialFunc = pgconn.DialFunc(dial)
+		// Leave name resolution to the far end of the tunnel.
+		pc.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
+		return stdlib.OpenDB(*pc), nil
+	case MariaDB:
+		mc, err := mysql.ParseDSN(c.DriverDSN())
+		if err != nil {
+			return nil, err
+		}
+		mc.DialFunc = dial
+		connector, err := mysql.NewConnector(mc)
+		if err != nil {
+			return nil, err
+		}
+		return sql.OpenDB(connector), nil
+	case Oracle:
+		connector := go_ora.NewConnector(c.DriverDSN())
+		connector.(*go_ora.OracleConnector).Dialer(dial)
+		return sql.OpenDB(connector), nil
+	}
+	return nil, fmt.Errorf("unsupported database type %q", c.Type)
 }

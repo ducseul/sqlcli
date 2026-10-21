@@ -60,6 +60,31 @@ sqlcli -type mariadb -host db.local -u root -p secret -db shop   # -u / -p are s
 Flags override values parsed from the connection string.
 If no password is given you are prompted (hidden input). `SQLCLI_DSN` and `SQLCLI_PASSWORD` env vars are honoured.
 
+## Proxy and SSH tunnel
+
+`-proxy` and `-tun` can be repeated and mixed; the hops are chained in the order they appear on the command line.
+Each hop is reached through the ones before it and the database through the last one. Host names are resolved at the far end of the chain.
+
+```bash
+# through a SOCKS5 proxy
+sqlcli -proxy socks5:10.14.5.11:8443 "postgres://u:p@db.internal/app"
+
+# through an SSH bastion (like ssh -L)
+sqlcli -tun app@10.15.5.1 "oracle://u:p@10.20.0.7:1521/SVC"
+
+# SSH reached via the proxy, then the database via SSH
+sqlcli -proxy socks5:10.14.5.11:8443 -tun app@10.15.5.1 "mariadb://u:p@10.20.0.8/shop"
+```
+
+| Flag | Meaning |
+|---|---|
+| `-proxy P` | `socks5:host:port`, `socks4:host:port` (SOCKS4a for host names) or `http:host:port` (HTTP CONNECT); also `scheme://[user:pass@]host:port`. Default port 1080 for SOCKS, 8080 for HTTP |
+| `-tun T`, `-tunnel T` | SSH tunnel `[user[:pass]@]host[:port]`, default port 22, default user the OS user |
+| `-tun-key FILE` | private key for SSH tunnels (passphrase is prompted) |
+
+SSH auth tries ssh-agent (`SSH_AUTH_SOCK`), `-tun-key`, `~/.ssh/id_ed25519|id_ecdsa|id_rsa`, then the password (prompted if not given).
+Host keys are checked against `~/.ssh/known_hosts`: a changed key is refused, an unknown host is accepted with a warning showing its fingerprint.
+
 ## Quick query mode
 
 Any of `-sql`, `-f`, or piped stdin runs the statements and exits (exit code 1 on SQL error, 2 on usage error).
@@ -143,6 +168,7 @@ docker run -d --name ora   -e ORACLE_PASSWORD=pass -e APP_USER=test -e APP_USER_
 main.go              flags, quick mode, dispatch to TUI
 internal/conn        DSN parsing + auto-detect, driver DSN building, Open()
 internal/query       statement splitter, Exec/ExecScript, value formatting, ListTables/DescribeTable
+internal/tunnel      socks4/socks5/http proxy + ssh tunnel dialer chain
 internal/format      table / csv / tsv / json / vertical renderers
 internal/tui         tview-based interactive UI
 ```

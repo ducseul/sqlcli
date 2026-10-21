@@ -21,6 +21,7 @@ import (
 	"sqlcli/internal/pager"
 	"sqlcli/internal/query"
 	"sqlcli/internal/tui"
+	"sqlcli/internal/tunnel"
 )
 
 var version = "dev"
@@ -52,6 +53,15 @@ CONNECTION (pick one style)
   -user, -u U
   -password, -p P   omit to be prompted (or set SQLCLI_PASSWORD)
   -db NAME      database name (postgres/mariadb) or service name (oracle)
+
+PROXY / TUNNEL (repeatable; hops are chained in the order given)
+  -proxy P      socks5:host:port | socks4:host:port | http:host:port
+                (also scheme://[user:pass@]host:port; default port 1080 / 8080)
+  -tun, -tunnel T   ssh tunnel [user[:pass]@]host[:port] (default port 22)
+                auth: ssh-agent, -tun-key, ~/.ssh/id_*, then password (prompted)
+  -tun-key FILE private key for ssh tunnels
+                e.g. -proxy socks5:10.14.5.11:8443 -tun app@10.15.5.1
+                     reaches the ssh server through the proxy, the database through ssh
 
 QUERY MODE
   -sql "..."    run statement(s) and exit
@@ -85,6 +95,8 @@ func main() {
 		limit                                      int
 		timeout                                    time.Duration
 		continueOnErr, quiet, showVersion, noPager bool
+		via                                        tunnel.Chain
+		tunKey                                     string
 	)
 	flag.Usage = usage
 	if len(os.Args) == 2 {
@@ -103,6 +115,10 @@ func main() {
 	flag.StringVar(&password, "password", os.Getenv("SQLCLI_PASSWORD"), "password")
 	flag.StringVar(&password, "p", os.Getenv("SQLCLI_PASSWORD"), "password (short for -password)")
 	flag.StringVar(&database, "db", "", "database / service name")
+	flag.Var(hopFlag{&via, tunnel.ParseProxy}, "proxy", "proxy hop (socks4|socks5|http)")
+	flag.Var(hopFlag{&via, tunnel.ParseSSH}, "tun", "ssh tunnel hop")
+	flag.Var(hopFlag{&via, tunnel.ParseSSH}, "tunnel", "ssh tunnel hop (same as -tun)")
+	flag.StringVar(&tunKey, "tun-key", "", "private key for ssh tunnels")
 	flag.StringVar(&sqlText, "sql", "", "SQL to execute")
 	flag.StringVar(&file, "f", "", "SQL script file")
 	flag.StringVar(&fmtName, "format", "auto", "output format")
@@ -149,6 +165,12 @@ func main() {
 		os.Exit(2)
 	}
 	cfg.Timeout = timeout
+	for _, h := range via {
+		if h.Kind == tunnel.SSH {
+			h.KeyFile = tunKey
+		}
+	}
+	cfg.Via = via
 
 	// Figure out script source before connecting so we fail fast on bad input.
 	script := sqlText
@@ -168,15 +190,17 @@ func main() {
 		script = string(b)
 	}
 
+	if !stdinPiped {
+		tunnel.Prompt = readSecret
+	}
+
 	// Prompt for password if we have a user but no password and a terminal.
 	if cfg.Password == "" && cfg.User != "" && !stdinPiped {
-		fmt.Fprintf(os.Stderr, "Password for %s: ", cfg.User)
-		pw, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Fprintln(os.Stderr)
+		pw, err := readSecret(fmt.Sprintf("Password for %s: ", cfg.User))
 		if err != nil {
 			fatal(err)
 		}
-		cfg.Password = string(pw)
+		cfg.Password = pw
 	}
 
 	db, err := cfg.Open()
@@ -286,6 +310,36 @@ func buildConfig(dsn, typ, host string, port int, user, password, database strin
 		cfg.Database = database
 	}
 	return cfg, nil
+}
+
+// hopFlag appends a parsed proxy / tunnel hop to a shared chain, so -proxy and
+// -tun keep their relative order on the command line.
+type hopFlag struct {
+	chain *tunnel.Chain
+	parse func(string) (tunnel.Hop, error)
+}
+
+func (f hopFlag) String() string {
+	if f.chain == nil {
+		return ""
+	}
+	return f.chain.String()
+}
+
+func (f hopFlag) Set(s string) error {
+	h, err := f.parse(s)
+	if err != nil {
+		return err
+	}
+	*f.chain = append(*f.chain, &h)
+	return nil
+}
+
+func readSecret(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	return string(b), err
 }
 
 func fatal(err error) {
