@@ -59,6 +59,7 @@ QUERY MODE
 OTHER
   -timeout D    connect/query timeout (default 30s)
   -version
+  -h, help      show this help
 
 ENV
   SQLCLI_DSN, SQLCLI_PASSWORD
@@ -75,6 +76,13 @@ func main() {
 		continueOnErr, quiet, showVersion        bool
 	)
 	flag.Usage = usage
+	if len(os.Args) == 2 {
+		switch strings.ToLower(os.Args[1]) {
+		case "help", "-h", "--help", "-help", "/?", "/h":
+			usage()
+			return
+		}
+	}
 	flag.StringVar(&dsn, "dsn", os.Getenv("SQLCLI_DSN"), "connection string")
 	flag.StringVar(&typ, "type", "", "database type")
 	flag.StringVar(&host, "host", "", "host")
