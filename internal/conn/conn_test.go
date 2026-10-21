@@ -23,6 +23,12 @@ func TestParse(t *testing.T) {
 		{"u:p@tcp(h:3306)/d?charset=utf8", MariaDB, "h", 3306, "u", "p", "d"},
 		{"u/p@h:1521/svc", Oracle, "h", 1521, "u", "p", "svc"},
 		{"host=h port=5432 user=u password=p dbname=d", Postgres, "h", 5432, "u", "p", "d"},
+		{"jdbc:oracle:thin:@h:1521:orcl", Oracle, "h", 1521, "", "", ""},
+		{"jdbc:oracle:thin:@h:1522/svc", Oracle, "h", 1522, "", "", "svc"},
+		{"jdbc:oracle:thin:@//h:1521/svc", Oracle, "h", 1521, "", "", "svc"},
+		{"jdbc:oracle:thin:u/p@h:1521:orcl", Oracle, "h", 1521, "u", "p", ""},
+		{"jdbc:postgresql://h:5433/d?user=u&password=p", Postgres, "h", 5433, "u", "p", "d"},
+		{"jdbc:mysql://h/d", MariaDB, "h", 3306, "", "", "d"},
 	}
 	for _, tc := range cases {
 		c, err := Parse(tc.in)
@@ -35,6 +41,27 @@ func TestParse(t *testing.T) {
 	}
 	if _, err := Parse("foo://x"); err == nil {
 		t.Error("expected error for unknown scheme")
+	}
+}
+
+func TestParseJDBCOracleSID(t *testing.T) {
+	c, err := Parse("jdbc:oracle:thin:@10.0.0.1:1521:db12c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.User = "u"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if dsn := c.DriverDSN(); !strings.Contains(dsn, "SID=db12c") {
+		t.Fatalf("SID missing from %s", dsn)
+	}
+	c, err = Parse("jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS=(HOST=h)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=s)))")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Params["connStr"] == "" {
+		t.Fatal("connStr not set")
 	}
 }
 

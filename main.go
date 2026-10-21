@@ -37,12 +37,15 @@ CONNECTION (pick one style)
                   user/pass@host:1521/service         (sqlplus style)
                   user:pass@tcp(host:3306)/db         (mysql style)
                   host=h port=5432 user=u dbname=d    (libpq style)
+                  jdbc:oracle:thin:@host:1521:SID     (ojdbc, also @host:1521/service,
+                                                       @//host:1521/service, @(DESCRIPTION=...))
+                  jdbc:postgresql://host:5432/db      (also jdbc:mysql://, jdbc:mariadb://)
                 A bare first argument is treated as -dsn.
   -type T       postgres | mariadb | mysql | oracle
   -host H       default localhost
   -port N       default 5432 / 3306 / 1521 by type
-  -user U
-  -password P   omit to be prompted (or set SQLCLI_PASSWORD)
+  -user, -u U
+  -password, -p P   omit to be prompted (or set SQLCLI_PASSWORD)
   -db NAME      database name (postgres/mariadb) or service name (oracle)
 
 QUERY MODE
@@ -77,7 +80,9 @@ func main() {
 	flag.StringVar(&host, "host", "", "host")
 	flag.IntVar(&port, "port", 0, "port")
 	flag.StringVar(&user, "user", "", "username")
+	flag.StringVar(&user, "u", "", "username (short for -user)")
 	flag.StringVar(&password, "password", os.Getenv("SQLCLI_PASSWORD"), "password")
+	flag.StringVar(&password, "p", os.Getenv("SQLCLI_PASSWORD"), "password (short for -password)")
 	flag.StringVar(&database, "db", "", "database / service name")
 	flag.StringVar(&sqlText, "sql", "", "SQL to execute")
 	flag.StringVar(&file, "f", "", "SQL script file")

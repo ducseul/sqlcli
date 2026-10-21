@@ -77,10 +77,17 @@ func NormalizeType(s string) (DBType, error) {
 //	user:pass@tcp(host:3306)/dbname          (go-sql-driver style, mariadb)
 //	user/pass@host:1521/service              (sqlplus style, oracle)
 //	host=... port=... user=... dbname=...     (libpq keyword style, postgres)
+//	jdbc:oracle:thin:@host:1521:SID           (JDBC / ojdbc forms, see parseJDBC)
+//	jdbc:postgresql://host:5432/db, jdbc:mysql://..., jdbc:mariadb://...
 func Parse(dsn string) (*Config, error) {
 	dsn = strings.TrimSpace(dsn)
 	if dsn == "" {
 		return nil, fmt.Errorf("empty connection string")
+	}
+
+	// JDBC form.
+	if strings.HasPrefix(strings.ToLower(dsn), "jdbc:") {
+		return parseJDBC(dsn[len("jdbc:"):])
 	}
 
 	// URL form with scheme.
@@ -133,6 +140,88 @@ func parseURL(t DBType, raw string) (*Config, error) {
 		if len(v) > 0 {
 			c.Params[k] = v[0]
 		}
+	}
+	return c.fill(), nil
+}
+
+// parseJDBC parses a JDBC URL with the "jdbc:" prefix already removed.
+//
+//	oracle:thin:@host:port:SID
+//	oracle:thin:@host:port/service
+//	oracle:thin:@//host:port/service
+//	oracle:thin:user/pass@host:port:SID
+//	oracle:thin:@(DESCRIPTION=...)             (TNS descriptor)
+//	postgresql://host:port/db?user=u&password=p
+//	mysql://host:port/db, mariadb://host:port/db
+func parseJDBC(rest string) (*Config, error) {
+	lower := strings.ToLower(rest)
+	if !strings.HasPrefix(lower, "oracle:") {
+		scheme, _, ok := strings.Cut(rest, "://")
+		if !ok {
+			return nil, fmt.Errorf("unsupported JDBC URL %q", "jdbc:"+rest)
+		}
+		t, err := NormalizeType(scheme)
+		if err != nil {
+			return nil, fmt.Errorf("unsupported JDBC subprotocol %q: %w", scheme, err)
+		}
+		c, err := parseURL(t, rest)
+		if err != nil {
+			return nil, err
+		}
+		// JDBC carries credentials as query parameters.
+		for _, k := range []string{"user", "password"} {
+			if v, ok := c.Params[k]; ok {
+				if k == "user" {
+					c.User = v
+				} else {
+					c.Password = v
+				}
+				delete(c.Params, k)
+			}
+		}
+		return c, nil
+	}
+
+	// Oracle: oracle:<driver>:[user/pass]@<target>
+	c := &Config{Type: Oracle, Params: map[string]string{}}
+	at := strings.LastIndex(rest, "@")
+	if at < 0 {
+		return nil, fmt.Errorf("invalid Oracle JDBC URL: missing '@'")
+	}
+	prefix, target := rest[:at], strings.TrimSpace(rest[at+1:])
+	// prefix is "oracle:thin" or "oracle:thin:user/pass".
+	if parts := strings.SplitN(prefix, ":", 3); len(parts) == 3 {
+		c.User, c.Password, _ = strings.Cut(parts[2], "/")
+	}
+	if strings.HasPrefix(target, "(") {
+		c.Params["connStr"] = target
+		return c.fill(), nil
+	}
+	target = strings.TrimPrefix(target, "//")
+	if addr, svc, ok := strings.Cut(target, "/"); ok {
+		// host:port/service
+		if err := c.setHostPort(addr); err != nil {
+			return nil, err
+		}
+		c.Database = svc
+		return c.fill(), nil
+	}
+	// host:port:SID or host:SID
+	parts := strings.Split(target, ":")
+	switch len(parts) {
+	case 3:
+		c.Host = parts[0]
+		p, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid port %q", parts[1])
+		}
+		c.Port = p
+		c.Params["SID"] = parts[2]
+	case 2:
+		c.Host = parts[0]
+		c.Params["SID"] = parts[1]
+	default:
+		return nil, fmt.Errorf("invalid Oracle JDBC target %q", target)
 	}
 	return c.fill(), nil
 }
@@ -250,8 +339,8 @@ func (c *Config) Validate() error {
 	if c.User == "" {
 		return fmt.Errorf("username is required")
 	}
-	if c.Type == Oracle && c.Database == "" {
-		return fmt.Errorf("oracle requires a service name (-db)")
+	if c.Type == Oracle && c.Database == "" && c.Params["SID"] == "" && c.Params["connStr"] == "" {
+		return fmt.Errorf("oracle requires a service name (-db) or SID")
 	}
 	return nil
 }
@@ -319,6 +408,11 @@ func (c *Config) DriverDSN() string {
 
 // Redacted returns a human readable description without the password.
 func (c *Config) Redacted() string {
+	if c.Type == Oracle && c.Database == "" {
+		if sid := c.Params["SID"]; sid != "" {
+			return fmt.Sprintf("%s://%s@%s:%d (SID=%s)", c.Type, c.User, c.Host, c.Port, sid)
+		}
+	}
 	return fmt.Sprintf("%s://%s@%s:%d/%s", c.Type, c.User, c.Host, c.Port, c.Database)
 }
 

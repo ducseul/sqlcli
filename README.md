@@ -44,9 +44,16 @@ sqlcli "user/pass@host:1521/SERVICE"            # sqlplus style  -> oracle
 sqlcli "user:pass@tcp(host:3306)/dbname"        # go-mysql style -> mariadb
 sqlcli "host=h port=5432 user=u dbname=d"       # libpq style    -> postgres
 
+# JDBC / ojdbc URLs
+sqlcli "jdbc:oracle:thin:@host:1521:SID"         # SID
+sqlcli "jdbc:oracle:thin:@//host:1521/SERVICE"   # service name (also @host:1521/SERVICE)
+sqlcli "jdbc:oracle:thin:@(DESCRIPTION=...)"     # TNS descriptor
+sqlcli "jdbc:postgresql://host:5432/db?user=u&password=p"   # also jdbc:mysql://, jdbc:mariadb://
+
 # Discrete flags
 sqlcli -type oracle -host 10.0.0.5 -port 1521 -user scott -db ORCLPDB1
 sqlcli -type mariadb -host db.local -user root -password secret -db shop
+sqlcli -type mariadb -host db.local -u root -p secret -db shop   # -u / -p are short for -user / -password
 ```
 
 `-type` accepts `postgres|postgresql|pg`, `mariadb|mysql`, `oracle|ora`.
