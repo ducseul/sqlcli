@@ -12,8 +12,14 @@ import (
 	"sqlcli/internal/query"
 )
 
-// Write renders the result in the chosen format: table | csv | tsv | json | vertical.
+// Write renders the result in the chosen format: auto | table | csv | tsv | json | vertical.
 func Write(w io.Writer, r *query.Result, format string, showMeta bool) error {
+	return WriteWidth(w, r, format, showMeta, 0)
+}
+
+// WriteWidth is Write with a terminal width: in "auto" format a table wider
+// than maxWidth is rendered vertically instead (maxWidth <= 0 = unlimited).
+func WriteWidth(w io.Writer, r *query.Result, format string, showMeta bool, maxWidth int) error {
 	if r.Err != nil {
 		fmt.Fprintf(w, "ERROR: %v\n", r.Err)
 		return r.Err
@@ -33,8 +39,15 @@ func Write(w io.Writer, r *query.Result, format string, showMeta bool) error {
 		return writeJSON(w, r)
 	case "vertical", "v":
 		writeVertical(w, r)
-	default:
+	case "table", "t":
 		writeTable(w, r)
+	default:
+		cells, widths := tableCells(r)
+		if maxWidth > 0 && tableWidth(widths) > maxWidth {
+			writeVertical(w, r)
+		} else {
+			printTable(w, r.Columns, cells, widths)
+		}
 	}
 	if showMeta {
 		fmt.Fprintf(w, "%d row(s) (%s)\n", len(r.Rows), r.Duration.Round(1e6))
@@ -92,6 +105,21 @@ func writeVertical(w io.Writer, r *query.Result) {
 
 // writeTable prints a psql/mysql-style box table.
 func writeTable(w io.Writer, r *query.Result) {
+	cells, widths := tableCells(r)
+	printTable(w, r.Columns, cells, widths)
+}
+
+// tableWidth is the rendered line width of a table with the given column widths.
+func tableWidth(widths []int) int {
+	n := 1
+	for _, wd := range widths {
+		n += wd + 3
+	}
+	return n
+}
+
+// tableCells sanitizes cell values and computes column widths.
+func tableCells(r *query.Result) ([][]string, []int) {
 	const maxCell = 200
 	widths := make([]int, len(r.Columns))
 	for i, c := range r.Columns {
@@ -111,6 +139,10 @@ func writeTable(w io.Writer, r *query.Result) {
 			}
 		}
 	}
+	return cells, widths
+}
+
+func printTable(w io.Writer, columns []string, cells [][]string, widths []int) {
 	sep := func() {
 		var b strings.Builder
 		b.WriteString("+")
@@ -132,13 +164,16 @@ func writeTable(w io.Writer, r *query.Result) {
 		fmt.Fprintln(w, b.String())
 	}
 	sep()
-	line(r.Columns)
+	line(columns)
 	sep()
 	for _, row := range cells {
 		line(row)
 	}
 	sep()
 }
+
+// DisplayWidth approximates terminal cell width (CJK counted as 2).
+func DisplayWidth(s string) int { return displayWidth(s) }
 
 // displayWidth approximates terminal cell width (CJK counted as 2).
 func displayWidth(s string) int {

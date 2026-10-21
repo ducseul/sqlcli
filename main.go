@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 
 	"sqlcli/internal/conn"
 	"sqlcli/internal/format"
+	"sqlcli/internal/pager"
 	"sqlcli/internal/query"
 	"sqlcli/internal/tui"
 )
@@ -51,7 +53,9 @@ CONNECTION (pick one style)
 QUERY MODE
   -sql "..."    run statement(s) and exit
   -f FILE       run a .sql script and exit ("-" = stdin). Piped stdin is also run.
-  -format F     table (default) | csv | tsv | json | vertical
+  -format F     auto (default: table, or vertical when wider than the terminal)
+                | table | csv | tsv | json | vertical
+  -nopager      don't page output taller than the terminal
   -limit N      max rows to fetch per statement (0 = all)
   -continue     keep running the script after an error
   -quiet        suppress row counts / timings
@@ -68,12 +72,12 @@ ENV
 
 func main() {
 	var (
-		dsn, typ, host, user, password, database string
-		port                                     int
-		sqlText, file, fmtName                   string
-		limit                                    int
-		timeout                                  time.Duration
-		continueOnErr, quiet, showVersion        bool
+		dsn, typ, host, user, password, database   string
+		port                                       int
+		sqlText, file, fmtName                     string
+		limit                                      int
+		timeout                                    time.Duration
+		continueOnErr, quiet, showVersion, noPager bool
 	)
 	flag.Usage = usage
 	if len(os.Args) == 2 {
@@ -94,7 +98,8 @@ func main() {
 	flag.StringVar(&database, "db", "", "database / service name")
 	flag.StringVar(&sqlText, "sql", "", "SQL to execute")
 	flag.StringVar(&file, "f", "", "SQL script file")
-	flag.StringVar(&fmtName, "format", "table", "output format")
+	flag.StringVar(&fmtName, "format", "auto", "output format")
+	flag.BoolVar(&noPager, "nopager", false, "disable pager")
 	flag.IntVar(&limit, "limit", 0, "max rows")
 	flag.DurationVar(&timeout, "timeout", 30*time.Second, "timeout")
 	flag.BoolVar(&continueOnErr, "continue", false, "continue on error")
@@ -181,8 +186,19 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	out := bufio.NewWriterSize(os.Stdout, 64*1024)
-	defer out.Flush()
+	// On an interactive terminal fit tables to its width and page long output.
+	width, height := 0, 0
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		width, height, _ = term.GetSize(int(os.Stdout.Fd()))
+	}
+	paging := !noPager && !stdinPiped && height > 0
+
+	var buf bytes.Buffer
+	var out io.Writer = &buf
+	bw := bufio.NewWriterSize(os.Stdout, 64*1024)
+	if !paging {
+		out = bw
+	}
 
 	exitCode := 0
 	results := query.ExecScript(ctx, db, script, limit, continueOnErr)
@@ -190,11 +206,16 @@ func main() {
 		if i > 0 && !quiet {
 			fmt.Fprintln(out)
 		}
-		if err := format.Write(out, r, fmtName, !quiet); err != nil {
+		if err := format.WriteWidth(out, r, fmtName, !quiet, width); err != nil {
 			exitCode = 1
 		}
 	}
-	out.Flush()
+	bw.Flush()
+	if paging {
+		if err := pager.Page(os.Stdout, os.Stdin, buf.String(), width, height); err != nil {
+			fatal(err)
+		}
+	}
 	os.Exit(exitCode)
 }
 

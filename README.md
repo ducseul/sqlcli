@@ -75,7 +75,8 @@ cat report.sql | sqlcli "postgres://u:p@h/db" -format csv -quiet > report.csv
 |---|---|
 | `-sql "..."` | statements to run; `;` separates them, quotes and comments are respected |
 | `-f FILE` | run a script (`-` = stdin) |
-| `-format` | `table` (default), `csv`, `tsv`, `json`, `vertical` |
+| `-format` | `auto` (default: table, or vertical when the table is wider than the terminal), `table`, `csv`, `tsv`, `json`, `vertical` |
+| `-nopager` | don't page output; by default output taller than the terminal is shown page by page (Enter/Space: next page, j/Down: next line, Esc/q/Ctrl+Q: quit) |
 | `-limit N` | fetch at most N rows per statement (0 = all) |
 | `-continue` | keep going after an error |
 | `-quiet` | no row counts / timings |
