@@ -1,4 +1,4 @@
-VERSION ?= 0.1.0
+VERSION ?= $(shell cat VERSION)
 LDFLAGS  = -s -w -X main.version=$(VERSION)
 
 .PHONY: build test release clean

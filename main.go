@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ import (
 )
 
 var version = "dev"
+
+const author = "ducseul"
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `sqlcli %s - single-binary SQL client (postgres | mariadb | oracle)
@@ -55,6 +58,8 @@ QUERY MODE
   -f FILE       run a .sql script and exit ("-" = stdin). Piped stdin is also run.
   -format F     auto (default: table, or vertical when wider than the terminal)
                 | table | csv | tsv | json | vertical
+  -o, -output FILE  write results to FILE as UTF-8 (use this instead of '>' in
+                PowerShell, which corrupts non-ASCII text; .csv gets a BOM for Excel on Windows only)
   -nopager      don't page output taller than the terminal
   -limit N      max rows to fetch per statement (0 = all)
   -continue     keep running the script after an error
@@ -62,19 +67,21 @@ QUERY MODE
 
 OTHER
   -timeout D    connect/query timeout (default 30s)
-  -version
+  -version, -v  print version and author
   -h, help      show this help
 
 ENV
   SQLCLI_DSN, SQLCLI_PASSWORD
-`, version)
+
+Author: %s
+`, version, author)
 }
 
 func main() {
 	var (
 		dsn, typ, host, user, password, database   string
 		port                                       int
-		sqlText, file, fmtName                     string
+		sqlText, file, fmtName, outFile            string
 		limit                                      int
 		timeout                                    time.Duration
 		continueOnErr, quiet, showVersion, noPager bool
@@ -99,12 +106,15 @@ func main() {
 	flag.StringVar(&sqlText, "sql", "", "SQL to execute")
 	flag.StringVar(&file, "f", "", "SQL script file")
 	flag.StringVar(&fmtName, "format", "auto", "output format")
+	flag.StringVar(&outFile, "o", "", "write output to FILE (UTF-8)")
+	flag.StringVar(&outFile, "output", "", "write output to FILE (UTF-8)")
 	flag.BoolVar(&noPager, "nopager", false, "disable pager")
 	flag.IntVar(&limit, "limit", 0, "max rows")
 	flag.DurationVar(&timeout, "timeout", 30*time.Second, "timeout")
 	flag.BoolVar(&continueOnErr, "continue", false, "continue on error")
 	flag.BoolVar(&quiet, "quiet", false, "quiet")
 	flag.BoolVar(&showVersion, "version", false, "print version")
+	flag.BoolVar(&showVersion, "v", false, "print version (short for -version)")
 	flag.Parse()
 
 	// Go's flag package stops at the first positional argument, so allow the
@@ -117,7 +127,7 @@ func main() {
 		}
 	}
 	if showVersion {
-		fmt.Println("sqlcli", version)
+		fmt.Println("sqlcli", version, "by", author)
 		return
 	}
 	if len(positional) > 1 {
@@ -195,7 +205,23 @@ func main() {
 
 	var buf bytes.Buffer
 	var out io.Writer = &buf
-	bw := bufio.NewWriterSize(os.Stdout, 64*1024)
+	var sink io.Writer = os.Stdout
+	if outFile != "" {
+		// Write the file ourselves: shell redirection on Windows PowerShell
+		// re-encodes our UTF-8 through the console codepage and mangles it.
+		f, err := os.Create(outFile)
+		if err != nil {
+			fatal(err)
+		}
+		defer f.Close()
+		// BOM so Excel detects UTF-8; Unix tools would read it as part of the first header.
+		if runtime.GOOS == "windows" && strings.HasSuffix(strings.ToLower(outFile), ".csv") {
+			f.WriteString("\xEF\xBB\xBF")
+		}
+		sink = f
+		width, paging = 0, false
+	}
+	bw := bufio.NewWriterSize(sink, 64*1024)
 	if !paging {
 		out = bw
 	}
@@ -211,6 +237,9 @@ func main() {
 		}
 	}
 	bw.Flush()
+	if outFile != "" {
+		fmt.Fprintf(os.Stderr, "wrote %s\n", outFile)
+	}
 	if paging {
 		if err := pager.Page(os.Stdout, os.Stdin, buf.String(), width, height); err != nil {
 			fatal(err)
