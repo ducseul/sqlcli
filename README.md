@@ -128,7 +128,7 @@ sqlcli "oracle://user:pass@host:1521/SVC"
 │...                  ││ID  │CUSTOMER_ID│STATUS│AMOUNT│CREATED      │
 │                     ││1001│7          │NEW   │120.5 │2026-10-18 … │
 └─────────────────────┘└────────────────────────────────────────────┘
- OK 37 row(s) in 12ms      F1 help  F5 run  F2 tables  F3 history  F8 export  Tab focus  Esc cancel  Ctrl+Q quit
+ OK 37 row(s) in 12ms      F1 help  F5 run  Ctrl+Q quit
 ```
 
 | Key | Action |

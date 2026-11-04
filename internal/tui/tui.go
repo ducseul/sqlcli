@@ -143,7 +143,7 @@ func (u *ui) build() {
 	// Status + hints
 	u.status = tview.NewTextView().SetDynamicColors(true).SetWrap(false)
 	u.hints = tview.NewTextView().SetDynamicColors(true).SetWrap(false).SetTextAlign(tview.AlignRight)
-	u.hints.SetText("[gray]F1[-] help  [gray]F5[-] run  [gray]Ctrl+Enter[-] run stmt  [gray]F2[-] tables  [gray]F3[-] history  [gray]F8[-] export  [gray]Tab[-] focus  [gray]Esc[-] cancel  [gray]Ctrl+Q[-] quit")
+	u.hints.SetText("[gray]F1[-] help  [gray]F5[-] run  [gray]Ctrl+Q[-] quit")
 	bar := tview.NewFlex().AddItem(u.status, 0, 2, false).AddItem(u.hints, 0, 3, false)
 
 	// Sidebar: filter + table list
