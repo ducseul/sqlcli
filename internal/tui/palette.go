@@ -61,6 +61,8 @@ func (u *ui) paletteCommands() []paletteCmd {
 		{"Grow SQL editor", "Ctrl+Shift+Down", func() { u.resizeEditor(1) }},
 		{"Shrink SQL editor", "Ctrl+Shift+Up", func() { u.resizeEditor(-1) }},
 		{"Help", "F1", u.showHelp},
+		{"Version (build, author, build date)", "", func() { u.showAbout(true) }},
+		{"Author", "", func() { u.showAbout(false) }},
 		{"Quit", "Ctrl+Q", u.app.Stop},
 	}
 }

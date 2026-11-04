@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -40,7 +41,18 @@ const (
 	defaultEditorWeight = 4
 )
 
+// About identifies the build; it is shown in the help and the command palette.
+type About struct {
+	Version   string
+	Author    string
+	BuildDate string
+}
+
+// repoURL is where sqlcli lives.
+const repoURL = "https://git.ducseul.com/ducseul/sqlcli"
+
 type ui struct {
+	about  About
 	app    *tview.Application
 	db     *sql.DB
 	cfg    *conn.Config
@@ -79,8 +91,9 @@ type ui struct {
 }
 
 // Run starts the TUI and blocks until the user quits.
-func Run(db *sql.DB, cfg *conn.Config, limit int) error {
+func Run(db *sql.DB, cfg *conn.Config, limit int, about About) error {
 	u := newUI(db, cfg, limit, historyPath(), schema.CachePath(cacheDir, cfg))
+	u.about = about
 	// Ctrl+C is "copy" in the TUI. The terminal is in raw mode so it arrives
 	// as a key, but ignore SIGINT too in case the shell or console still
 	// delivers one (e.g. Ctrl+C before raw mode is set, or a parent's signal).
@@ -832,9 +845,44 @@ const helpText = `[yellow::b]GLOBAL[-::-]
   History file: ~/.sqlcli_history`
 
 func (u *ui) showHelp() {
-	tv := tview.NewTextView().SetDynamicColors(true).SetScrollable(true).SetWrap(false).SetText(helpText)
+	text := helpText + "\n\n[yellow::b]AUTHOR[-::-]\n" + u.aboutText(false)
+	tv := tview.NewTextView().SetDynamicColors(true).SetScrollable(true).SetWrap(false).SetText(text)
 	tv.SetBorder(true).SetTitle(" Help (Esc=close) ").SetTitleAlign(tview.AlignLeft)
 	u.root.AddPage("help", center(tv, 0.8, 0.85), true, true)
+	u.app.SetFocus(tv)
+}
+
+// aboutText lists the author and the repository, plus the build when full.
+func (u *ui) aboutText(full bool) string {
+	a := u.about
+	orUnknown := func(s string) string {
+		if s == "" {
+			return "unknown"
+		}
+		return tview.Escape(s)
+	}
+	var b strings.Builder
+	if full {
+		fmt.Fprintf(&b, "  [green]Version[-]         %s\n", orUnknown(a.Version))
+		fmt.Fprintf(&b, "  [green]Build date[-]      %s\n", orUnknown(a.BuildDate))
+	}
+	fmt.Fprintf(&b, "  [green]Author[-]          %s\n", orUnknown(a.Author))
+	fmt.Fprintf(&b, "  [green]Repository[-]      %s", repoURL)
+	if full {
+		fmt.Fprintf(&b, "\n  [green]Go / platform[-]   %s %s/%s", runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	}
+	return b.String()
+}
+
+// showAbout opens a small popup with the author (and build) information.
+func (u *ui) showAbout(full bool) {
+	title := " Author (Esc=close) "
+	if full {
+		title = " Version (Esc=close) "
+	}
+	tv := tview.NewTextView().SetDynamicColors(true).SetWrap(false).SetText("\n" + u.aboutText(full))
+	tv.SetBorder(true).SetTitle(title).SetTitleAlign(tview.AlignLeft)
+	u.root.AddPage("text", center(tv, 0.8, 0.4), true, true)
 	u.app.SetFocus(tv)
 }
 

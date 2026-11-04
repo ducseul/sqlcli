@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -81,5 +82,34 @@ func TestPalette(t *testing.T) {
 	send(tcell.KeyCtrlP)
 	if front() != "help" {
 		t.Fatalf("Ctrl+P over help: front %q", front())
+	}
+}
+
+func TestPaletteVersion(t *testing.T) {
+	u := newTestUI()
+	u.about = About{Version: "9.8.7", Author: "ducseul", BuildDate: "2026-11-04T09:00:00Z"}
+	u.globalKeys(tcell.NewEventKey(tcell.KeyCtrlP, 0, tcell.ModNone))
+	in := u.app.GetFocus().(*tview.InputField)
+	in.SetText("version")
+	in.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), func(p tview.Primitive) { u.app.SetFocus(p) })
+	tv, ok := u.app.GetFocus().(*tview.TextView)
+	if !ok {
+		t.Fatal("version popup not focused")
+	}
+	got := tv.GetText(true)
+	for _, want := range []string{"9.8.7", "ducseul", "2026-11-04T09:00:00Z", repoURL} {
+		if !strings.Contains(got, want) {
+			t.Errorf("version popup lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestHelpHasAuthor(t *testing.T) {
+	u := newTestUI()
+	u.about = About{Version: "1.0.0", Author: "ducseul"}
+	u.showHelp()
+	got := u.app.GetFocus().(*tview.TextView).GetText(true)
+	if !strings.Contains(got, "AUTHOR") || !strings.Contains(got, "ducseul") {
+		t.Fatalf("help has no author section:\n%s", got[max(0, len(got)-300):])
 	}
 }

@@ -14,6 +14,7 @@ if (-not $Version) {
 Set-Content -Path VERSION -Value $Version -Encoding ascii
 Write-Host "version $Version"
 New-Item -ItemType Directory -Force dist | Out-Null
+$buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
 foreach ($t in $Targets) {
     $os, $arch = $t.Split("/")
@@ -21,7 +22,7 @@ foreach ($t in $Targets) {
     $out = "dist/sqlcli-$os-$arch$ext"
     Write-Host "building $out"
     $env:GOOS = $os; $env:GOARCH = $arch; $env:CGO_ENABLED = "0"
-    go build -trimpath -ldflags "-s -w -X main.version=$Version" -o $out .
+    go build -trimpath -ldflags "-s -w -X main.version=$Version -X main.buildDate=$buildDate" -o $out .
 }
 Remove-Item Env:GOOS, Env:GOARCH, Env:CGO_ENABLED -ErrorAction SilentlyContinue
 Get-ChildItem dist | ForEach-Object { "{0,-28} {1,6:N1} MB" -f $_.Name, ($_.Length / 1MB) }

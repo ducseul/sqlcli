@@ -134,7 +134,7 @@ sqlcli "oracle://user:pass@host:1521/SVC"
 | Key | Action |
 |---|---|
 | `F1` | help popup with every shortcut |
-| `Ctrl+P` | command palette: type to filter every action, `Up`/`Down` pick, `Enter` runs, `Esc` closes |
+| `Ctrl+P` | command palette: type to filter every action, `Up`/`Down` pick, `Enter` runs, `Esc` closes; also has `Version` (version, build date, author) and `Author` |
 | `F5` / `Ctrl+E` | run editor contents (or only the selected text) |
 | `Ctrl+Enter` | run only the statement under the cursor (or the selected text) |
 | `Ctrl+Shift+Left` / `Ctrl+Shift+Right` | narrow / widen the Tables sidebar |

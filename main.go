@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -24,9 +25,27 @@ import (
 	"sqlcli/internal/tunnel"
 )
 
-var version = "dev"
+var (
+	version   = "dev"
+	buildDate = "" // set with -ldflags "-X main.buildDate=..."; falls back to the commit time
+)
 
 const author = "ducseul"
+
+// builtAt is the build date, or the VCS commit time for plain `go build`.
+func builtAt() string {
+	if buildDate != "" {
+		return buildDate
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.time" {
+				return s.Value
+			}
+		}
+	}
+	return "unknown"
+}
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `sqlcli %s - single-binary SQL client (postgres | mariadb | oracle)
@@ -143,7 +162,7 @@ func main() {
 		}
 	}
 	if showVersion {
-		fmt.Println("sqlcli", version, "by", author)
+		fmt.Printf("sqlcli %s by %s (built %s)\n", version, author, builtAt())
 		return
 	}
 	if len(positional) > 1 {
@@ -211,7 +230,8 @@ func main() {
 
 	if strings.TrimSpace(script) == "" {
 		// Interactive TUI.
-		if err := tui.Run(db, cfg, limit); err != nil {
+		about := tui.About{Version: version, Author: author, BuildDate: builtAt()}
+		if err := tui.Run(db, cfg, limit, about); err != nil {
 			fatal(err)
 		}
 		return

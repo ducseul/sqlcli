@@ -1,5 +1,6 @@
 VERSION ?= $(shell cat VERSION)
-LDFLAGS  = -s -w -X main.version=$(VERSION)
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS  = -s -w -X main.version=$(VERSION) -X main.buildDate=$(BUILD_DATE)
 
 .PHONY: build test release clean
 
