@@ -136,6 +136,7 @@ sqlcli "oracle://user:pass@host:1521/SVC"
 | `Ctrl+Enter` | run only the statement under the cursor (or the selected text) |
 | `Ctrl+Shift+Left` / `Ctrl+Shift+Right` | narrow / widen the Tables sidebar |
 | `Ctrl+Shift+Up` / `Ctrl+Shift+Down` | move the SQL / Results divider up / down |
+| `Ctrl+Space` | open the autocomplete dropdown |
 | `Esc` | cancel a running query, or close a popup |
 | `F2` | show/hide the table sidebar |
 | `F3` | history popup (`Enter` loads a statement into the editor) |
@@ -144,11 +145,17 @@ sqlcli "oracle://user:pass@host:1521/SVC"
 | `Tab` / `Shift+Tab` | cycle focus: tables → editor → results |
 | `Ctrl+Q` | quit |
 
-In the table sidebar: `/` filters, `Enter` runs `SELECT * FROM <table>` (first 100 rows), `d` describes columns, `i` inserts the name into the editor, `r` reloads.
+In the table sidebar: `/` filters, `Enter` runs `SELECT * FROM <table>` (first 100 rows), `d` describes columns, `i` inserts the name into the editor, `r` re-introspects tables and columns.
 In the results grid: arrow keys move, `Enter` on a cell opens the full value (long text, multi-line).
 
 Queries run in the background; the UI stays responsive. Results are capped at `-limit` rows (default 1000 in the TUI) and the status bar says when the result was truncated.
 History is saved to `~/.sqlcli_history`.
+
+### Autocomplete
+
+On connect the status bar shows `introspecting schema/tables...` while the schema is read in the background. The table list fills the sidebar as soon as it arrives; columns (which can take longer on big schemas) are loaded after that and reach autocomplete whenever they are done. The result is cached in `./cache/<type>_<user>@<host>_<port>_<db>.json` (relative to the working directory, no password in it). On the next start the cache fills the sidebar and suggestions immediately, then gets refreshed.
+
+While typing in the SQL editor a dropdown suggests tables (after `FROM`/`JOIN`/`INTO`/`UPDATE`), columns of the tables in the current statement, and keywords. After `alias.`, `table.` or `schema.` only that table's columns (or that schema's tables) are offered. `Up`/`Down` pick, `Tab`/`Enter` insert, `Esc` closes; `Enter` on a word that is already complete still inserts a newline. Nothing pops up inside strings or comments.
 
 ## Tests
 
@@ -173,5 +180,6 @@ internal/conn        DSN parsing + auto-detect, driver DSN building, Open()
 internal/query       statement splitter, Exec/ExecScript, value formatting, ListTables/DescribeTable
 internal/tunnel      socks4/socks5/http proxy + ssh tunnel dialer chain
 internal/format      table / csv / tsv / json / vertical renderers
+internal/schema      table/column introspection, ./cache files, autocomplete suggestions
 internal/tui         tview-based interactive UI
 ```

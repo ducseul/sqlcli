@@ -17,7 +17,12 @@ import (
 	"sqlcli/internal/conn"
 	"sqlcli/internal/format"
 	"sqlcli/internal/query"
+	"sqlcli/internal/schema"
 )
+
+// cacheDir is where introspected schemas are stored, relative to the working
+// directory.
+const cacheDir = "cache"
 
 const (
 	defaultLimit = 1000
@@ -63,31 +68,38 @@ type ui struct {
 	history   []string
 	histFile  string
 	allTables []string
+
+	schema    *schema.Schema // tables + columns for autocomplete (nil until loaded)
+	cacheFile string         // where schema is cached ("" = no cache)
+	comp      completion     // autocomplete dropdown state
+	typing    bool           // the current key edits the editor text
 }
 
 // Run starts the TUI and blocks until the user quits.
 func Run(db *sql.DB, cfg *conn.Config, limit int) error {
-	u := newUI(db, cfg, limit, historyPath())
+	u := newUI(db, cfg, limit, historyPath(), schema.CachePath(cacheDir, cfg))
 	return u.app.EnableMouse(true).EnablePaste(true).Run()
 }
 
-func newUI(db *sql.DB, cfg *conn.Config, limit int, histFile string) *ui {
+func newUI(db *sql.DB, cfg *conn.Config, limit int, histFile, cacheFile string) *ui {
 	if limit <= 0 {
 		limit = defaultLimit
 	}
 	u := &ui{
-		app:      tview.NewApplication(),
-		db:       db,
-		cfg:      cfg,
-		limit:    limit,
-		showSide: true,
-		histFile: histFile,
+		app:       tview.NewApplication(),
+		db:        db,
+		cfg:       cfg,
+		limit:     limit,
+		showSide:  true,
+		histFile:  histFile,
+		cacheFile: cacheFile,
 
 		sideWidth:    defaultSideWidth,
 		editorWeight: defaultEditorWeight,
 	}
 	u.loadHistory()
 	u.build()
+	u.loadCachedSchema()
 	u.loadTables()
 	u.app.SetRoot(u.root, true)
 	return u
@@ -97,6 +109,25 @@ func (u *ui) build() {
 	// Editor
 	u.editor = tview.NewTextArea().SetPlaceholder("Type SQL here. F5 = run all, Ctrl+Enter = run statement at cursor, F1 = help, Ctrl+Q = quit")
 	u.editor.SetBorder(true).SetTitle(" SQL ").SetTitleAlign(tview.AlignLeft)
+	u.editor.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		switch ev.Key() {
+		case tcell.KeyRune, tcell.KeyBackspace, tcell.KeyBackspace2, tcell.KeyDelete:
+			u.typing = ev.Modifiers()&(tcell.ModCtrl|tcell.ModAlt) == 0
+		}
+		return ev
+	})
+	u.editor.SetChangedFunc(func() {
+		if u.typing {
+			u.updateCompletion(false)
+		} else {
+			u.hideCompletion()
+		}
+	})
+	u.editor.SetMovedFunc(func() {
+		if !u.typing {
+			u.hideCompletion()
+		}
+	})
 
 	// Results
 	u.results = tview.NewTable().SetBorders(false).SetSeparator(tview.Borders.Vertical).
@@ -170,18 +201,31 @@ func (u *ui) build() {
 	u.root = tview.NewPages().AddPage("main", main, true, true)
 
 	u.app.SetInputCapture(u.globalKeys)
+	u.app.SetAfterDrawFunc(u.drawCompletion)
 	u.setStatus(fmt.Sprintf("[green]connected[-] %s  (limit %d rows)", u.cfg.Redacted(), u.limit))
 }
 
 func (u *ui) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
+	u.typing = false
 	// Don't steal keys from modals.
 	if name, _ := u.root.GetFrontPage(); name != "main" {
+		u.hideCompletion()
 		if ev.Key() == tcell.KeyEsc {
 			u.root.RemovePage(name)
 			u.app.SetFocus(u.editor)
 			return nil
 		}
 		return ev
+	}
+	// Ctrl+Space: open the autocomplete dropdown.
+	if ev.Key() == tcell.KeyCtrlSpace || (ev.Key() == tcell.KeyRune && ev.Rune() == ' ' && ev.Modifiers()&tcell.ModCtrl != 0) {
+		if u.app.GetFocus() == u.editor {
+			u.updateCompletion(true)
+		}
+		return nil
+	}
+	if u.completionKeys(ev) {
+		return nil
 	}
 	// Ctrl+Enter: most terminals send it as LF (Ctrl+J); the Windows console
 	// and terminals with extended key reporting send Enter + Ctrl.
@@ -423,20 +467,91 @@ func oneLine(s string) string {
 
 // ---- tables sidebar --------------------------------------------------------
 
+// loadCachedSchema fills the sidebar and autocomplete from the on-disk cache
+// so they work right away, before introspection finishes.
+func (u *ui) loadCachedSchema() {
+	if u.cacheFile == "" {
+		return
+	}
+	s, err := schema.Load(u.cacheFile)
+	if err != nil {
+		return
+	}
+	u.applySchema(s)
+}
+
+func (u *ui) applySchema(s *schema.Schema) {
+	u.schema = s
+	u.allTables = s.TableNames()
+	u.renderTables()
+}
+
+// loadTables introspects tables and columns in the background and rewrites
+// the cache. The sidebar is filled as soon as the table list arrives;
+// autocomplete gets the columns whenever they are done.
 func (u *ui) loadTables() {
+	msg := "[yellow]introspecting schema/tables...[-]"
+	if u.schema != nil {
+		msg += fmt.Sprintf(" (using cache: %d tables)", len(u.schema.Tables))
+	}
+	u.setStatus(msg)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		names, err := query.ListTables(ctx, u.db, u.cfg.Type)
+		started := time.Now()
+		s, err := schema.Introspect(ctx, u.db, u.cfg.Type, func(names []string) {
+			u.app.QueueUpdateDraw(func() {
+				u.allTables = names
+				u.renderTables()
+				// Without a cache, table names alone already help autocomplete.
+				if u.schema == nil {
+					u.schema = schema.FromTables(u.cfg.Type, names)
+				}
+				if !u.isRunning() {
+					u.setStatus(fmt.Sprintf("[green]connected[-] %s  %d tables  [yellow]introspecting columns...[-]",
+						u.cfg.Redacted(), len(names)))
+				}
+			})
+		})
+		var saveErr error
+		// A failed column query returns tables only; don't let that replace a
+		// complete cache.
+		if s != nil && err == nil && u.cacheFile != "" {
+			saveErr = s.Save(u.cacheFile)
+		}
 		u.app.QueueUpdateDraw(func() {
-			if err != nil {
-				u.setStatus(fmt.Sprintf("[red]list tables:[-] %s", tview.Escape(err.Error())))
+			if s == nil {
+				u.setStatus(fmt.Sprintf("[red]introspect:[-] %s", tview.Escape(err.Error())))
 				return
 			}
-			u.allTables = names
-			u.renderTables()
+			if err != nil && u.schema != nil && u.schema.ColumnCount() > 0 {
+				u.allTables = s.TableNames() // keep the cached columns for autocomplete
+				u.renderTables()
+			} else {
+				u.applySchema(s)
+			}
+			if u.isRunning() {
+				return // don't hide the running query's status
+			}
+			msg := fmt.Sprintf("[green]connected[-] %s  (limit %d rows)  schema: %d tables, %d columns in %s",
+				u.cfg.Redacted(), u.limit, len(s.Tables), s.ColumnCount(), time.Since(started).Round(time.Millisecond))
+			switch {
+			case err != nil:
+				msg += "  [yellow]" + tview.Escape(err.Error()) + "[-]"
+			case saveErr != nil:
+				msg += "  [yellow]cache: " + tview.Escape(saveErr.Error()) + "[-]"
+			case u.cacheFile != "":
+				msg += "  [gray]cached " + tview.Escape(u.cacheFile) + "[-]"
+			}
+			u.setStatus(msg)
 		})
 	}()
+}
+
+func (u *ui) isRunning() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.running
 }
 
 func (u *ui) renderTables() {
@@ -579,6 +694,7 @@ const helpText = `[yellow::b]GLOBAL[-::-]
   [green]Ctrl+Enter[-]      run only the statement under the cursor (or the selection)
   [green]Ctrl+Shift+Left/Right[-]  narrow / widen the Tables sidebar
   [green]Ctrl+Shift+Up/Down[-]     move the SQL / Results divider up / down
+  [green]Ctrl+Space[-]      open the autocomplete dropdown
   [green]Esc[-]             cancel the running query / close a popup
   [green]F2[-]              show / hide the Tables sidebar
   [green]F3[-]              history popup (Enter loads a statement into the editor)
@@ -591,13 +707,18 @@ const helpText = `[yellow::b]GLOBAL[-::-]
   Type freely; several statements separated by ';' run in order.
   Oracle PL/SQL blocks end with a line containing only '/'.
   Select text with Shift+Arrows and press F5 to run just that part.
+  Autocomplete pops up while typing (tables, columns, keywords):
+    [green]Up/Down[-] pick, [green]Tab[-] / [green]Enter[-] insert, [green]Esc[-] close.
+    After "alias." or "table." only that table's columns are offered.
+  The schema is introspected on connect and cached under ./cache, so the
+  next start has suggestions immediately; [green]r[-] in the sidebar re-introspects.
 
 [yellow::b]TABLES SIDEBAR[-::-]
   [green]/[-]               filter the list (Enter or Tab returns to the list)
   [green]Enter[-]           run  SELECT * FROM <table>  (first 100 rows)
   [green]d[-]               describe the table (columns, types, nullable)
   [green]i[-]               insert the table name into the editor
-  [green]r[-]               reload the table list
+  [green]r[-]               reload tables + columns (refreshes the cache)
 
 [yellow::b]RESULTS[-::-]
   Arrow keys / PgUp / PgDn move; [green]Enter[-] on a cell shows its full value.

@@ -35,7 +35,7 @@ func TestTUISmoke(t *testing.T) {
 	}
 	screen.SetSize(140, 40)
 
-	u := newUI(db, cfg, 50, filepath.Join(t.TempDir(), "hist"))
+	u := newUI(db, cfg, 50, filepath.Join(t.TempDir(), "hist"), filepath.Join(t.TempDir(), "cache.json"))
 	u.app.SetScreen(screen)
 	done := make(chan error, 1)
 	go func() { done <- u.app.Run() }()
