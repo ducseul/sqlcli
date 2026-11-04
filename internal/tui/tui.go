@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -56,6 +57,7 @@ type ui struct {
 	results  *tview.Table
 	status   *tview.TextView
 	hints    *tview.TextView
+	screen   tcell.Screen // last drawn screen (for the OSC 52 clipboard fallback)
 	right    *tview.Flex
 	showSide bool
 
@@ -78,6 +80,11 @@ type ui struct {
 // Run starts the TUI and blocks until the user quits.
 func Run(db *sql.DB, cfg *conn.Config, limit int) error {
 	u := newUI(db, cfg, limit, historyPath(), schema.CachePath(cacheDir, cfg))
+	// Ctrl+C is "copy" in the TUI. The terminal is in raw mode so it arrives
+	// as a key, but ignore SIGINT too in case the shell or console still
+	// delivers one (e.g. Ctrl+C before raw mode is set, or a parent's signal).
+	signal.Ignore(os.Interrupt)
+	defer signal.Reset(os.Interrupt)
 	return u.app.EnableMouse(true).EnablePaste(true).Run()
 }
 
@@ -202,11 +209,24 @@ func (u *ui) build() {
 
 	u.app.SetInputCapture(u.globalKeys)
 	u.app.SetAfterDrawFunc(u.drawCompletion)
+	u.app.SetBeforeDrawFunc(u.rememberScreen)
+	// Ctrl+X (cut) inside the editor uses the system clipboard too.
+	u.editor.SetClipboard(func(s string) { _ = u.writeClipboard(s) }, func() string { return "" })
 	u.setStatus(fmt.Sprintf("[green]connected[-] %s  (limit %d rows)", u.cfg.Redacted(), u.limit))
 }
 
 func (u *ui) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
 	u.typing = false
+	// Ctrl+C / Ctrl+V are always ours: copy / paste, never "quit" (tview would
+	// otherwise stop the app on Ctrl+C).
+	switch ev.Key() {
+	case tcell.KeyCtrlC:
+		u.copyFocused()
+		return nil
+	case tcell.KeyCtrlV:
+		u.pasteClipboard()
+		return nil
+	}
 	// Don't steal keys from modals.
 	if name, _ := u.root.GetFrontPage(); name != "main" {
 		u.hideCompletion()
@@ -751,6 +771,8 @@ const helpText = `[yellow::b]GLOBAL[-::-]
   [green]F8[-]              export the current result to a CSV file
   [green]F9[-]              explain the statement under the cursor (or the selection)
   [green]Shift+F9[-]        raw explain: JSON plan (PG / MariaDB), PLAN_TABLE rows (Oracle)
+  [green]Ctrl+C[-]          copy: selected SQL text / selected result cell / table name
+  [green]Ctrl+V[-]          paste the clipboard into the SQL editor
   [green]Ctrl+L[-]          clear the editor
   [green]Tab[-] / [green]Shift+Tab[-]  cycle focus: Tables -> SQL -> Results
   [green]Ctrl+Q[-]          quit

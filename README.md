@@ -145,6 +145,8 @@ sqlcli "oracle://user:pass@host:1521/SVC"
 | `F8` | export the current result to CSV |
 | `F9` | explain the statement under the cursor (or the selection) |
 | `Shift+F9` | raw explain: JSON plan (PostgreSQL / MariaDB), `PLAN_TABLE` rows (Oracle) |
+| `Ctrl+C` | copy: the selected SQL text, the selected result cell (full value) or the table name |
+| `Ctrl+V` | paste the clipboard into the SQL editor |
 | `Ctrl+L` | clear the editor |
 | `Tab` / `Shift+Tab` | cycle focus: tables → editor → results |
 | `Ctrl+Q` | quit |
