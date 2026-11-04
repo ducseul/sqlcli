@@ -22,6 +22,16 @@ import (
 const (
 	defaultLimit = 1000
 	cellMaxWidth = 40
+
+	// Sidebar width (columns) and its Ctrl+Shift+Left/Right step and bounds.
+	defaultSideWidth = 32
+	sideWidthStep    = 4
+	minSideWidth     = 12
+	minMainWidth     = 20
+
+	// SQL editor vs results height, as editorWeight : (heightUnits - editorWeight).
+	heightUnits         = 12
+	defaultEditorWeight = 4
 )
 
 type ui struct {
@@ -41,7 +51,11 @@ type ui struct {
 	results  *tview.Table
 	status   *tview.TextView
 	hints    *tview.TextView
+	right    *tview.Flex
 	showSide bool
+
+	sideWidth    int // sidebar width in columns
+	editorWeight int // editor share of heightUnits
 
 	mu        sync.Mutex
 	running   bool
@@ -54,7 +68,7 @@ type ui struct {
 // Run starts the TUI and blocks until the user quits.
 func Run(db *sql.DB, cfg *conn.Config, limit int) error {
 	u := newUI(db, cfg, limit, historyPath())
-	return u.app.EnableMouse(true).Run()
+	return u.app.EnableMouse(true).EnablePaste(true).Run()
 }
 
 func newUI(db *sql.DB, cfg *conn.Config, limit int, histFile string) *ui {
@@ -68,6 +82,9 @@ func newUI(db *sql.DB, cfg *conn.Config, limit int, histFile string) *ui {
 		limit:    limit,
 		showSide: true,
 		histFile: histFile,
+
+		sideWidth:    defaultSideWidth,
+		editorWeight: defaultEditorWeight,
 	}
 	u.loadHistory()
 	u.build()
@@ -78,7 +95,7 @@ func newUI(db *sql.DB, cfg *conn.Config, limit int, histFile string) *ui {
 
 func (u *ui) build() {
 	// Editor
-	u.editor = tview.NewTextArea().SetPlaceholder("Type SQL here. F5 = run, F1 = help, Ctrl+Q = quit")
+	u.editor = tview.NewTextArea().SetPlaceholder("Type SQL here. F5 = run all, Ctrl+Enter = run statement at cursor, F1 = help, Ctrl+Q = quit")
 	u.editor.SetBorder(true).SetTitle(" SQL ").SetTitleAlign(tview.AlignLeft)
 
 	// Results
@@ -95,7 +112,7 @@ func (u *ui) build() {
 	// Status + hints
 	u.status = tview.NewTextView().SetDynamicColors(true).SetWrap(false)
 	u.hints = tview.NewTextView().SetDynamicColors(true).SetWrap(false).SetTextAlign(tview.AlignRight)
-	u.hints.SetText("[gray]F1[-] help  [gray]F5[-] run  [gray]F2[-] tables  [gray]F3[-] history  [gray]F8[-] export  [gray]Tab[-] focus  [gray]Esc[-] cancel  [gray]Ctrl+Q[-] quit")
+	u.hints.SetText("[gray]F1[-] help  [gray]F5[-] run  [gray]Ctrl+Enter[-] run stmt  [gray]F2[-] tables  [gray]F3[-] history  [gray]F8[-] export  [gray]Tab[-] focus  [gray]Esc[-] cancel  [gray]Ctrl+Q[-] quit")
 	bar := tview.NewFlex().AddItem(u.status, 0, 2, false).AddItem(u.hints, 0, 3, false)
 
 	// Sidebar: filter + table list
@@ -140,11 +157,11 @@ func (u *ui) build() {
 		AddItem(u.tables, 0, 1, false)
 	u.sidebar.SetBorder(true).SetTitle(" Tables (Enter=select, d=describe, i=insert) ").SetTitleAlign(tview.AlignLeft)
 
-	right := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(u.editor, 0, 1, true).
-		AddItem(u.results, 0, 2, false)
+	u.right = tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(u.editor, 0, u.editorWeight, true).
+		AddItem(u.results, 0, heightUnits-u.editorWeight, false)
 
-	u.layout = tview.NewFlex().AddItem(u.sidebar, 32, 0, false).AddItem(right, 0, 1, true)
+	u.layout = tview.NewFlex().AddItem(u.sidebar, u.sideWidth, 0, false).AddItem(u.right, 0, 1, true)
 
 	main := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(u.layout, 0, 1, true).
@@ -165,6 +182,29 @@ func (u *ui) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
 			return nil
 		}
 		return ev
+	}
+	// Ctrl+Enter: most terminals send it as LF (Ctrl+J); the Windows console
+	// and terminals with extended key reporting send Enter + Ctrl.
+	if (ev.Key() == tcell.KeyEnter && ev.Modifiers()&tcell.ModCtrl != 0) || ev.Key() == tcell.KeyCtrlJ {
+		u.runStatementAtCursor()
+		return nil
+	}
+	// Ctrl+Shift+arrows resize the panes (plain Ctrl+arrows stay word jumps).
+	if ev.Modifiers()&(tcell.ModCtrl|tcell.ModShift|tcell.ModAlt) == tcell.ModCtrl|tcell.ModShift {
+		switch ev.Key() {
+		case tcell.KeyLeft:
+			u.resizeSidebar(-sideWidthStep)
+			return nil
+		case tcell.KeyRight:
+			u.resizeSidebar(sideWidthStep)
+			return nil
+		case tcell.KeyUp:
+			u.resizeEditor(-1)
+			return nil
+		case tcell.KeyDown:
+			u.resizeEditor(1)
+			return nil
+		}
 	}
 	switch ev.Key() {
 	case tcell.KeyCtrlQ:
@@ -226,10 +266,47 @@ func (u *ui) cycleFocus(back bool) {
 	u.app.SetFocus(order[idx])
 }
 
+// runStatementAtCursor runs the selection if there is one, otherwise only the
+// statement the editor cursor is in.
+func (u *ui) runStatementAtCursor() {
+	text, start, end := u.editor.GetSelection()
+	if start == end {
+		text = query.StatementAt(u.editor.GetText(), start)
+	}
+	if strings.TrimSpace(text) == "" {
+		u.setStatus("[yellow]no statement at cursor[-]")
+		return
+	}
+	u.runSQL(text)
+}
+
+// resizeSidebar changes the Tables panel width by delta columns.
+func (u *ui) resizeSidebar(delta int) {
+	if !u.showSide {
+		u.toggleSidebar()
+		return
+	}
+	maxW := 200
+	if _, _, w, _ := u.layout.GetRect(); w > 0 {
+		maxW = max(minSideWidth, w-minMainWidth)
+	}
+	u.sideWidth = max(minSideWidth, min(u.sideWidth+delta, maxW))
+	u.layout.ResizeItem(u.sidebar, u.sideWidth, 0)
+	u.setStatus(fmt.Sprintf("tables width %d", u.sideWidth))
+}
+
+// resizeEditor moves the SQL/results divider by delta units (negative = up).
+func (u *ui) resizeEditor(delta int) {
+	u.editorWeight = max(1, min(u.editorWeight+delta, heightUnits-1))
+	u.right.ResizeItem(u.editor, 0, u.editorWeight)
+	u.right.ResizeItem(u.results, 0, heightUnits-u.editorWeight)
+	u.setStatus(fmt.Sprintf("SQL / results height %d:%d", u.editorWeight, heightUnits-u.editorWeight))
+}
+
 func (u *ui) toggleSidebar() {
 	u.showSide = !u.showSide
 	if u.showSide {
-		u.layout.ResizeItem(u.sidebar, 32, 0)
+		u.layout.ResizeItem(u.sidebar, u.sideWidth, 0)
 	} else {
 		u.layout.ResizeItem(u.sidebar, 0, 0)
 		if u.app.GetFocus() == u.tables || u.app.GetFocus() == u.filter {
@@ -499,6 +576,9 @@ func (u *ui) exportCSV() {
 const helpText = `[yellow::b]GLOBAL[-::-]
   [green]F1[-]              this help
   [green]F5[-] / [green]Ctrl+E[-]     run the editor contents (or only the selected text)
+  [green]Ctrl+Enter[-]      run only the statement under the cursor (or the selection)
+  [green]Ctrl+Shift+Left/Right[-]  narrow / widen the Tables sidebar
+  [green]Ctrl+Shift+Up/Down[-]     move the SQL / Results divider up / down
   [green]Esc[-]             cancel the running query / close a popup
   [green]F2[-]              show / hide the Tables sidebar
   [green]F3[-]              history popup (Enter loads a statement into the editor)

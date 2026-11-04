@@ -133,6 +133,9 @@ sqlcli "oracle://user:pass@host:1521/SVC"
 |---|---|
 | `F1` | help popup with every shortcut |
 | `F5` / `Ctrl+E` | run editor contents (or only the selected text) |
+| `Ctrl+Enter` | run only the statement under the cursor (or the selected text) |
+| `Ctrl+Shift+Left` / `Ctrl+Shift+Right` | narrow / widen the Tables sidebar |
+| `Ctrl+Shift+Up` / `Ctrl+Shift+Down` | move the SQL / Results divider up / down |
 | `Esc` | cancel a running query, or close a popup |
 | `F2` | show/hide the table sidebar |
 | `F3` | history popup (`Enter` loads a statement into the editor) |

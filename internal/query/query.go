@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"sqlcli/internal/conn"
 )
@@ -28,19 +29,49 @@ type Result struct {
 // terminated by a line containing only "/".
 func Split(script string) []string {
 	var out []string
+	for _, st := range SplitRanges(script) {
+		if st.Text != "" {
+			out = append(out, st.Text)
+		}
+	}
+	return out
+}
+
+// Stmt is one segment produced by SplitRanges. Start and End are byte
+// offsets into the script: [Start, End) is the raw segment (untrimmed, without
+// its terminator); End is the terminator's offset or len(script).
+type Stmt struct {
+	Text       string
+	Start, End int
+}
+
+// SplitRanges is like Split but also reports where each statement sits in the
+// script. Empty segments are kept (Text == "") so a cursor position can always
+// be mapped to the segment it falls in.
+func SplitRanges(script string) []Stmt {
+	var out []Stmt
 	var cur strings.Builder
 	inSingle, inDouble, inLine, inBlock := false, false, false, false
 	plsqlDepth := 0
 
-	flush := func() {
+	runes := []rune(script)
+	// byteAt[i] is the byte offset of runes[i]; byteAt[len(runes)] == len(script).
+	byteAt := make([]int, len(runes)+1)
+	for i, b := 0, 0; i < len(runes); i++ {
+		byteAt[i] = b
+		b += utf8.RuneLen(runes[i])
+		byteAt[i+1] = b
+	}
+	segStart := 0
+
+	// flush ends the current segment at rune index end (the terminator).
+	flush := func(end int) {
 		s := strings.TrimSpace(cur.String())
 		cur.Reset()
-		if s != "" {
-			out = append(out, s)
-		}
+		out = append(out, Stmt{Text: s, Start: byteAt[segStart], End: byteAt[end]})
+		segStart = end + 1
 	}
 
-	runes := []rune(script)
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
 		next := rune(0)
@@ -85,12 +116,12 @@ func Split(script string) []string {
 		case r == '/' && isLineAlone(runes, i):
 			// Oracle terminator for PL/SQL blocks.
 			plsqlDepth = 0
-			flush()
+			flush(i)
 		case r == ';':
 			if plsqlDepth > 0 {
 				cur.WriteRune(r)
 			} else {
-				flush()
+				flush(i)
 			}
 		default:
 			cur.WriteRune(r)
@@ -108,8 +139,67 @@ func Split(script string) []string {
 			}
 		}
 	}
-	flush()
+	flush(len(runes))
 	return out
+}
+
+// StatementAt returns the statement that byte offset pos (e.g. an editor
+// cursor) falls in. When pos sits in blank space right after a terminator on
+// the same line (the cursor just after "select 1;"), the preceding statement
+// is returned. Otherwise the statement whose text follows the cursor wins (or
+// the last one before it). It returns "" when the script has no statements.
+func StatementAt(script string, pos int) string {
+	stmts := SplitRanges(script)
+	if len(stmts) == 0 {
+		return ""
+	}
+	pos = max(0, min(pos, len(script)))
+	idx := len(stmts) - 1
+	for i, st := range stmts {
+		if pos <= st.End {
+			idx = i
+			break
+		}
+	}
+	st := stmts[idx]
+	if pos < st.Start {
+		pos = st.Start
+	}
+	lead := script[st.Start:pos]
+	if st.Text != "" && strings.TrimSpace(lead) != "" {
+		return st.Text
+	}
+	prev := func() string {
+		for i := idx - 1; i >= 0; i-- {
+			if stmts[i].Text != "" {
+				return stmts[i].Text
+			}
+		}
+		return ""
+	}
+	// Cursor is in the blank area before this segment's text. If nothing but
+	// spaces follows on this line, it belongs to the statement just ended.
+	rest := script[pos:st.End]
+	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+		rest = rest[:nl]
+	}
+	if !strings.Contains(lead, "\n") && strings.TrimSpace(rest) == "" {
+		if s := prev(); s != "" {
+			return s
+		}
+	}
+	if st.Text != "" {
+		return st.Text
+	}
+	if s := prev(); s != "" {
+		return s
+	}
+	for _, s := range stmts[idx+1:] {
+		if s.Text != "" {
+			return s.Text
+		}
+	}
+	return ""
 }
 
 // isLineAlone reports whether runes[i] is the only non-space char on its line.
