@@ -88,6 +88,7 @@ type ui struct {
 	comp      completion      // autocomplete dropdown state
 	typing    bool            // the current key edits the editor text
 	palPrev   tview.Primitive // focus to restore when the command palette closes
+	cs        *connStatus     // running Connection status measurement
 }
 
 // Run starts the TUI and blocks until the user quits.
@@ -258,6 +259,9 @@ func (u *ui) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
 			return nil
 		}
 		if ev.Key() == tcell.KeyEsc {
+			if name == "connstatus" {
+				u.stopConnStatus()
+			}
 			u.root.RemovePage(name)
 			u.app.SetFocus(u.editor)
 			return nil
@@ -798,6 +802,7 @@ func (u *ui) exportCSV() {
 const helpText = `[yellow::b]GLOBAL[-::-]
   [green]F1[-]              this help
   [green]Ctrl+P[-]          command palette: type to filter, Enter runs the command
+                    ("Connection status": ping, loss, jitter, traffic, server info)
   [green]F5[-] / [green]Ctrl+E[-]     run the editor contents (or only the selected text)
   [green]Ctrl+Enter[-]      run only the statement under the cursor (or the selection)
   [green]Ctrl+Shift+Left/Right[-]  narrow / widen the Tables sidebar

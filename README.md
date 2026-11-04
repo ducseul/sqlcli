@@ -134,7 +134,7 @@ sqlcli "oracle://user:pass@host:1521/SVC"
 | Key | Action |
 |---|---|
 | `F1` | help popup with every shortcut |
-| `Ctrl+P` | command palette: type to filter every action, `Up`/`Down` pick, `Enter` runs, `Esc` closes; also has `Version` (version, build date, author) and `Author` |
+| `Ctrl+P` | command palette: type to filter every action, `Up`/`Down` pick, `Enter` runs, `Esc` closes; also has `Connection status`, `Version` (version, build date, author) and `Author` |
 | `F5` / `Ctrl+E` | run editor contents (or only the selected text) |
 | `Ctrl+Enter` | run only the statement under the cursor (or the selected text) |
 | `Ctrl+Shift+Left` / `Ctrl+Shift+Right` | narrow / widen the Tables sidebar |
@@ -157,6 +157,17 @@ In the results grid: arrow keys move, `Enter` on a cell opens the full value (lo
 
 Queries run in the background; the UI stays responsive. Results are capped at `-limit` rows (default 1000 in the TUI) and the status bar says when the result was truncated.
 History is saved to `~/.sqlcli_history`.
+
+### Connection status
+
+`Ctrl+P` → `Connection status` measures the link to the database and shows:
+
+- **Latency**: 10 driver-level pings (round trip min / avg / max, jitter, packet loss), the TCP connect time to the server through the same proxies / tunnels, and the clock skew between the server and this machine.
+- **Traffic**: bytes uploaded / downloaded by this session (total, current rate, average rate), open and dialed connections, pool usage.
+- **Connection**: target, route (direct or the proxy / SSH chain), local and remote address.
+- **Server**: version, user / database, server address, session id, encryption (TLS), encoding, time zone, uptime and connection count — whatever the account is allowed to read.
+
+`r` measures again, `Esc` closes.
 
 ### Autocomplete
 

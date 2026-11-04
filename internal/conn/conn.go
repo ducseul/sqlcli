@@ -41,6 +41,9 @@ type Config struct {
 	Params   map[string]string
 	Timeout  time.Duration
 	Via      tunnel.Chain // proxies / ssh tunnels to connect through, in order
+
+	traffic *Traffic        // byte counters of the opened pool
+	dial    tunnel.DialFunc // the pool's dialer (shares SSH sessions), without counting
 }
 
 // DefaultPort returns the conventional port for a database type.
@@ -447,12 +450,12 @@ func (c *Config) Open() (*sql.DB, error) {
 	return db, nil
 }
 
-// openDB opens the pool, routing connections through c.Via when set.
+// openDB opens the pool, routing connections through c.Via when set, and
+// counts their traffic.
 func (c *Config) openDB() (*sql.DB, error) {
-	if len(c.Via) == 0 {
-		return sql.Open(c.DriverName(), c.DriverDSN())
-	}
-	dial := c.Via.Dialer(c.Timeout)
+	c.traffic = newTraffic()
+	c.dial = c.Via.Dialer(c.Timeout)
+	dial := c.traffic.wrap(c.dial)
 	switch c.Type {
 	case Postgres:
 		pc, err := pgx.ParseConfig(c.DriverDSN())
@@ -460,8 +463,10 @@ func (c *Config) openDB() (*sql.DB, error) {
 			return nil, err
 		}
 		pc.DialFunc = pgconn.DialFunc(dial)
-		// Leave name resolution to the far end of the tunnel.
-		pc.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
+		if len(c.Via) > 0 {
+			// Leave name resolution to the far end of the tunnel.
+			pc.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
+		}
 		return stdlib.OpenDB(*pc), nil
 	case MariaDB:
 		mc, err := mysql.ParseDSN(c.DriverDSN())

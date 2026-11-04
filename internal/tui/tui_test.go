@@ -90,10 +90,10 @@ func TestTUISmoke(t *testing.T) {
 
 	// Help popup opens with F1 and closes with Esc.
 	key(tcell.KeyF1)
-	waitFor("help", "Help", "TABLES SIDEBAR", "Ctrl+Q")
+	waitFor("help", "Help", "GLOBAL", "Ctrl+Q")
 	key(tcell.KeyEsc)
 	time.Sleep(100 * time.Millisecond)
-	if s := dump(screen); strings.Contains(s, "TABLES SIDEBAR") {
+	if s := dump(screen); strings.Contains(s, "GLOBAL") {
 		t.Fatalf("help still open:\n%s", s)
 	}
 

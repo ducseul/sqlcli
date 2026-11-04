@@ -39,6 +39,7 @@ func (u *ui) paletteCommands() []paletteCmd {
 			}
 			u.app.SetFocus(u.filter)
 		}},
+		{"Connection status (ping, loss, jitter, traffic, server)", "", u.showConnStatus},
 		{"Reload tables and columns", "r", u.loadTables},
 		{"Describe selected table", "d", func() {
 			if i := u.tables.GetCurrentItem(); i >= 0 && u.tables.GetItemCount() > 0 {
