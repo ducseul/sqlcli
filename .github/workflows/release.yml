@@ -1,0 +1,82 @@
+# Builds the release binaries and publishes a GitHub release when a version
+# tag (vX.Y.Z) reaches GitHub. Tags are created on Gitea (git push of the tag,
+# or publish-release.ps1) and arrive here through the Gitea push mirror; this
+# workflow never creates tags itself, because the mirror (git push --mirror)
+# would delete any ref that exists only on GitHub.
+#
+# Gitea Actions also reads .github/workflows, so the job is restricted to
+# github.com and is skipped when it runs on Gitea.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.3.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check tag matches VERSION
+        run: |
+          version="${TAG#v}"
+          file="$(head -n1 VERSION | tr -d '[:space:]')"
+          if [ "$version" != "$file" ]; then
+            echo "::error::tag $TAG does not match VERSION ($file)"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          for target in windows/amd64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            ext=""; [ "$os" = windows ] && ext=".exe"
+            out="dist/sqlcli-$os-$arch$ext"
+            echo "building $out"
+            GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X main.version=$VERSION" -o "$out" .
+          done
+          (cd dist && sha256sum sqlcli-* > SHA256SUMS)
+          ls -l dist
+          ./dist/sqlcli-linux-amd64 -v
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists, replacing assets"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --verify-tag \
+              --title "sqlcli $TAG" --generate-notes
+          fi

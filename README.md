@@ -29,6 +29,8 @@ Cross-platform release into `dist/` (Windows, Linux, macOS; amd64 + arm64):
 
 or `make release` on Linux/macOS.
 
+GitHub releases are built by CI: pushing a `vX.Y.Z` tag (it must match `VERSION`) to Gitea mirrors it to GitHub, where `.github/workflows/release.yml` tests, builds all five binaries plus `SHA256SUMS` and publishes the release. The workflow only runs on github.com; on Gitea it is skipped. It can also be re-run for an existing tag from the Actions tab (`workflow_dispatch`).
+
 ## Connect
 
 Connection can be given as one connection string (type auto-detected from the scheme) or as discrete flags.
