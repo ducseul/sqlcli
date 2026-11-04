@@ -143,6 +143,8 @@ sqlcli "oracle://user:pass@host:1521/SVC"
 | `F2` | show/hide the table sidebar |
 | `F3` | history popup (`Enter` loads a statement into the editor) |
 | `F8` | export the current result to CSV |
+| `F9` | explain the statement under the cursor (or the selection) |
+| `Shift+F9` | raw explain: JSON plan (PostgreSQL / MariaDB), `PLAN_TABLE` rows (Oracle) |
 | `Ctrl+L` | clear the editor |
 | `Tab` / `Shift+Tab` | cycle focus: tables → editor → results |
 | `Ctrl+Q` | quit |

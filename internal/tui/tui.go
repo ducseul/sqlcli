@@ -264,6 +264,10 @@ func (u *ui) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
 		}
 		u.runSQL(text)
 		return nil
+	case tcell.KeyF9, tcell.KeyF21:
+		// Shift+F9 arrives as F9+Shift, or as F21 on terminals that encode it.
+		u.explainAtCursor(ev.Key() == tcell.KeyF21 || ev.Modifiers()&tcell.ModShift != 0)
+		return nil
 	case tcell.KeyF2:
 		u.toggleSidebar()
 		return nil
@@ -370,31 +374,77 @@ func (u *ui) runSQL(text string) {
 	if text == "" {
 		return
 	}
+	if u.runAsync("running...", func(ctx context.Context) func() {
+		results := query.ExecScript(ctx, u.db, text, u.limit, false)
+		return func() { u.showResults(results) }
+	}) {
+		u.addHistory(text)
+	}
+}
+
+// runAsync runs work in the background as the single cancellable job and
+// applies the UI update it returns on the draw thread. It reports false when
+// another job is already running.
+func (u *ui) runAsync(label string, work func(ctx context.Context) func()) bool {
 	u.mu.Lock()
 	if u.running {
 		u.mu.Unlock()
 		u.setStatus("[yellow]a query is already running (Esc to cancel)[-]")
-		return
+		return false
 	}
 	u.running = true
 	u.ctx, u.cancel = context.WithCancel(context.Background())
 	ctx := u.ctx
 	u.mu.Unlock()
 
-	u.setStatus("[yellow]running...[-] (Esc to cancel)")
-	u.addHistory(text)
-
+	u.setStatus("[yellow]" + label + "[-] (Esc to cancel)")
 	go func() {
-		results := query.ExecScript(ctx, u.db, text, u.limit, false)
+		apply := work(ctx)
 		u.mu.Lock()
 		u.running = false
 		u.cancel = nil
 		u.mu.Unlock()
-
-		u.app.QueueUpdateDraw(func() {
-			u.showResults(results)
-		})
+		u.app.QueueUpdateDraw(apply)
 	}()
+	return true
+}
+
+// explainAtCursor shows the plan of the selection, or of the statement under
+// the cursor. raw selects the engine's full (JSON / PLAN_TABLE) output.
+func (u *ui) explainAtCursor(raw bool) {
+	text, start, end := u.editor.GetSelection()
+	if start == end {
+		text = query.StatementAt(u.editor.GetText(), start)
+	}
+	if strings.TrimSpace(text) == "" {
+		u.setStatus("[yellow]no statement at cursor[-]")
+		return
+	}
+	kind := "explain"
+	if raw {
+		kind = "raw explain"
+	}
+	u.runAsync(kind+"...", func(ctx context.Context) func() {
+		p, err := query.Explain(ctx, u.db, u.cfg.Type, text, raw)
+		return func() {
+			if err != nil {
+				u.setStatus(fmt.Sprintf("[red]ERROR:[-] %s", tview.Escape(err.Error())))
+				u.showText(" Error ", fmt.Sprintf("%s\n\n--- statement ---\n%s", err.Error(), text))
+				return
+			}
+			u.setStatus(fmt.Sprintf("[green]OK[-] %s in %s", kind, p.Duration.Round(time.Millisecond)))
+			if p.Result != nil {
+				u.renderResult(p.Result)
+				u.results.SetTitle(fmt.Sprintf(" %s (%d rows) ", strings.ToUpper(kind[:1])+kind[1:], len(p.Result.Rows)))
+				return
+			}
+			// No wrapping: plan trees rely on indentation.
+			tv := tview.NewTextView().SetText(tview.Escape(p.Text)).SetScrollable(true).SetWrap(false)
+			tv.SetBorder(true).SetTitle(" " + strings.ToUpper(kind[:1]) + kind[1:] + " (Esc=close) ").SetTitleAlign(tview.AlignLeft)
+			u.root.AddPage("text", center(tv, 0.9, 0.8), true, true)
+			u.app.SetFocus(tv)
+		}
+	})
 }
 
 func (u *ui) showResults(results []*query.Result) {
@@ -699,6 +749,8 @@ const helpText = `[yellow::b]GLOBAL[-::-]
   [green]F2[-]              show / hide the Tables sidebar
   [green]F3[-]              history popup (Enter loads a statement into the editor)
   [green]F8[-]              export the current result to a CSV file
+  [green]F9[-]              explain the statement under the cursor (or the selection)
+  [green]Shift+F9[-]        raw explain: JSON plan (PG / MariaDB), PLAN_TABLE rows (Oracle)
   [green]Ctrl+L[-]          clear the editor
   [green]Tab[-] / [green]Shift+Tab[-]  cycle focus: Tables -> SQL -> Results
   [green]Ctrl+Q[-]          quit
