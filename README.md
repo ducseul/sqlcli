@@ -128,12 +128,13 @@ sqlcli "oracle://user:pass@host:1521/SVC"
 │...                  ││ID  │CUSTOMER_ID│STATUS│AMOUNT│CREATED      │
 │                     ││1001│7          │NEW   │120.5 │2026-10-18 … │
 └─────────────────────┘└────────────────────────────────────────────┘
- OK 37 row(s) in 12ms      F1 help  F5 run  Ctrl+Q quit
+ OK 37 row(s) in 12ms  F1 help  Ctrl+P commands  F5 run  Ctrl+Q quit
 ```
 
 | Key | Action |
 |---|---|
 | `F1` | help popup with every shortcut |
+| `Ctrl+P` | command palette: type to filter every action, `Up`/`Down` pick, `Enter` runs, `Esc` closes |
 | `F5` / `Ctrl+E` | run editor contents (or only the selected text) |
 | `Ctrl+Enter` | run only the statement under the cursor (or the selected text) |
 | `Ctrl+Shift+Left` / `Ctrl+Shift+Right` | narrow / widen the Tables sidebar |

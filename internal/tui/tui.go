@@ -71,10 +71,11 @@ type ui struct {
 	histFile  string
 	allTables []string
 
-	schema    *schema.Schema // tables + columns for autocomplete (nil until loaded)
-	cacheFile string         // where schema is cached ("" = no cache)
-	comp      completion     // autocomplete dropdown state
-	typing    bool           // the current key edits the editor text
+	schema    *schema.Schema  // tables + columns for autocomplete (nil until loaded)
+	cacheFile string          // where schema is cached ("" = no cache)
+	comp      completion      // autocomplete dropdown state
+	typing    bool            // the current key edits the editor text
+	palPrev   tview.Primitive // focus to restore when the command palette closes
 }
 
 // Run starts the TUI and blocks until the user quits.
@@ -114,7 +115,7 @@ func newUI(db *sql.DB, cfg *conn.Config, limit int, histFile, cacheFile string) 
 
 func (u *ui) build() {
 	// Editor
-	u.editor = tview.NewTextArea().SetPlaceholder("Type SQL here. F5 = run all, Ctrl+Enter = run statement at cursor, F1 = help, Ctrl+Q = quit")
+	u.editor = tview.NewTextArea().SetPlaceholder("Type SQL here. F5 = run all, Ctrl+Enter = run statement at cursor, Ctrl+P = commands, F1 = help, Ctrl+Q = quit")
 	u.editor.SetBorder(true).SetTitle(" SQL ").SetTitleAlign(tview.AlignLeft)
 	u.editor.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		switch ev.Key() {
@@ -150,7 +151,7 @@ func (u *ui) build() {
 	// Status + hints
 	u.status = tview.NewTextView().SetDynamicColors(true).SetWrap(false)
 	u.hints = tview.NewTextView().SetDynamicColors(true).SetWrap(false).SetTextAlign(tview.AlignRight)
-	u.hints.SetText("[gray]F1[-] help  [gray]F5[-] run  [gray]Ctrl+Q[-] quit")
+	u.hints.SetText("[gray]F1[-] help  [gray]Ctrl+P[-] commands  [gray]F5[-] run  [gray]Ctrl+Q[-] quit")
 	bar := tview.NewFlex().AddItem(u.status, 0, 2, false).AddItem(u.hints, 0, 3, false)
 
 	// Sidebar: filter + table list
@@ -226,10 +227,23 @@ func (u *ui) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
 	case tcell.KeyCtrlV:
 		u.pasteClipboard()
 		return nil
+	case tcell.KeyCtrlP:
+		// Ctrl+P toggles the command palette; other popups ignore it.
+		switch name, _ := u.root.GetFrontPage(); name {
+		case "main":
+			u.showPalette()
+		case "palette":
+			u.closePalette()
+		}
+		return nil
 	}
 	// Don't steal keys from modals.
 	if name, _ := u.root.GetFrontPage(); name != "main" {
 		u.hideCompletion()
+		if ev.Key() == tcell.KeyEsc && name == "palette" {
+			u.closePalette()
+			return nil
+		}
 		if ev.Key() == tcell.KeyEsc {
 			u.root.RemovePage(name)
 			u.app.SetFocus(u.editor)
@@ -278,11 +292,7 @@ func (u *ui) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
 		u.showHelp()
 		return nil
 	case tcell.KeyF5, tcell.KeyCtrlE:
-		text, start, end := u.editor.GetSelection()
-		if start == end {
-			text = u.editor.GetText()
-		}
-		u.runSQL(text)
+		u.runEditor()
 		return nil
 	case tcell.KeyF9, tcell.KeyF21:
 		// Shift+F9 arrives as F9+Shift, or as F21 on terminals that encode it.
@@ -301,11 +311,7 @@ func (u *ui) globalKeys(ev *tcell.EventKey) *tcell.EventKey {
 		u.editor.SetText("", false)
 		return nil
 	case tcell.KeyEsc:
-		u.mu.Lock()
-		if u.running && u.cancel != nil {
-			u.cancel()
-		}
-		u.mu.Unlock()
+		u.cancelRunning()
 		return nil
 	case tcell.KeyTab, tcell.KeyBacktab:
 		u.cycleFocus(ev.Key() == tcell.KeyBacktab)
@@ -332,6 +338,24 @@ func (u *ui) cycleFocus(back bool) {
 		idx = (idx + 1) % len(order)
 	}
 	u.app.SetFocus(order[idx])
+}
+
+// runEditor runs the selection if there is one, otherwise the whole editor.
+func (u *ui) runEditor() {
+	text, start, end := u.editor.GetSelection()
+	if start == end {
+		text = u.editor.GetText()
+	}
+	u.runSQL(text)
+}
+
+// cancelRunning cancels the running query, if any.
+func (u *ui) cancelRunning() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.running && u.cancel != nil {
+		u.cancel()
+	}
 }
 
 // runStatementAtCursor runs the selection if there is one, otherwise only the
@@ -760,6 +784,7 @@ func (u *ui) exportCSV() {
 
 const helpText = `[yellow::b]GLOBAL[-::-]
   [green]F1[-]              this help
+  [green]Ctrl+P[-]          command palette: type to filter, Enter runs the command
   [green]F5[-] / [green]Ctrl+E[-]     run the editor contents (or only the selected text)
   [green]Ctrl+Enter[-]      run only the statement under the cursor (or the selection)
   [green]Ctrl+Shift+Left/Right[-]  narrow / widen the Tables sidebar
